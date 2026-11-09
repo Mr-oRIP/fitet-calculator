@@ -3,14 +3,16 @@ export type Gender = 'M' | 'F';
 export type ChampionshipSeriesId =
   | 'A1_M' | 'A2_M' | 'B1_M' | 'B2_M' | 'C1_M'
   | 'C2_M' | 'D1_M' | 'D2_M' | 'D3_M' | 'D4_M'
-  | 'A1_F' | 'A2_F' | 'B_F' | 'C_F' | 'D1_F' | 'D2_F'
-  | 'MASTER_A1' | 'MASTER_A2' | 'MASTER_B' | 'MASTER_C'
-  | 'GIOVANILI';
+  | 'A1_F' | 'A2_F' | 'B_F' | 'C_F_N' | 'C_F' | 'D1_F' | 'D2_F'
+  | 'MASTER_A1' | 'MASTER_A2' | 'MASTER_B' | 'MASTER_C_N' | 'MASTER_C' | 'MASTER_A1_F' | 'MASTER_C_F'
+  | 'PARA_A1' | 'PARA_A2' | 'PARA_R'
+  | 'CI_GIOV' | 'COPPA_REGIONI' | 'GIOVANILI'
+  | 'SUPERCOPPA' | 'COPPA_ITALIA' | 'COPPA_ITALIA_CCRR' | 'COPPA_REG' | 'PROMOZIONALE';
 
 export interface ChampionshipSeriesConfig {
   id: ChampionshipSeriesId;
   nome: string;
-  settore: 'Maschile' | 'Femminile' | 'Master' | 'Giovanile';
+  settore: 'Maschile' | 'Femminile' | 'Master' | 'Giovanile' | 'Paralimpici' | 'Altro';
   baseWinPoints: number;
 }
 
@@ -48,13 +50,13 @@ export type BracketRoundIndex =
 export interface TournamentConfig {
   id: string;
   nome: string;
-  validi: number;            // Art. 2.4: Limite massimo tornei validi per questa tipologia
+  gruppoValidi: string;      // Tabella 3: gare che condividono lo stesso limite di tornei validi
+  validi: number;            // Art. 2.4: Limite massimo di tornei validi per il gruppo
   girq: number;              // Punti di partecipazione
   ptsVit: 20 | 15 | 10 | 5;  // Art. 2.5: Punti per ogni vittoria nel girone
-  open: boolean;             // Se true, usa il calcolo percentuale L0-L10 sul valore nominale
-  nominalValue?: number;     // Valore nominale L6 (100%) per i Tornei Open (es. Open 5 = 160)
+  open: boolean;             // Se true, i punti dipendono anche dalla dimensione del tabellone
   maxVit: number;            // Massimo vittorie possibili nel girone
-  turni: number[];           // Array di 11 posizioni: [1°, 2°, SF, QF, R16, R32, R64, R128, R256, R512, Prel]
+  turni: number[];           // Array di 11 posizioni: [V, F, SF, QF, OF, F16, F32, F64, F128, F256, F512]
 }
 
 export interface TournamentResult {
@@ -96,6 +98,17 @@ export interface PlayerScoreInput {
   ittfProtection: IttfProtectionInput;
 }
 
+export interface SavedState {
+  initialPoints: number;
+  gender: Gender;
+  isFuoriQuadro: boolean;
+  matches: Match[];
+  tournaments: TournamentResult[];
+  ittfEnabled: boolean;
+  ittfRank: number;
+  ittfSeniorPoints: number;
+}
+
 export interface ScoreBreakdown {
   initialPoints: number;
   teamMatchesPoints: number;
@@ -105,7 +118,7 @@ export interface ScoreBreakdown {
   ittfProtectionPoints: number;
   projectedFinalPoints: number;
   netVariation: number;
-  fuoriQuadroEndSeasonProjection: number; // Art. 2.7 (-5% se 0 attività)
+  fuoriQuadroEndSeasonProjection: number | null; // Art. 2.7: -5% se classificato senza incontri, null se già F.Q. e inattivo
   estimatedCategory: string;
   calculatedMatches: MatchCalculated[];
   calculatedTournaments: TournamentResultCalculated[];

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useSyncExternalStore } from 'react';
 import {
   BracketRoundIndex,
   ChampionshipSeriesId,
@@ -9,43 +9,64 @@ import {
   TournamentResult,
 } from '@/types/fitet';
 import {
-  BRACKET_ROUND_LABELS,
   calculateFitetScore,
-  calculateOpenPlacementPoints,
   calculateSingleMatchScore,
+  calculateTournamentEntryPoints,
+  getSelectableRounds,
   NEW_PLAYER_PRESETS,
   OPEN_BRACKET_SIZE_OPTIONS,
   TEAM_SERIES_CATALOG,
   TOURNAMENT_CATALOG,
   verifyOfficialScore,
 } from '@/utils/calculateFitetScore';
+import { parseOfficialScore, parseSavedState, toNonNegativeNumber } from '@/utils/parsing';
 
 const STORAGE_KEY = 'fitet_score_calculator_2026_v1';
 
-function parseOfficialScore(raw: string): number | null {
-  const trimmed = raw.trim().replace(/\s/g, '').replace(',', '.');
-  if (trimmed === '') return null;
-  const num = Number(trimmed);
-  if (!Number.isFinite(num)) return null;
-  return num;
+const subscribeToNothing = () => () => {};
+
+function readSavedState() {
+  try {
+    return parseSavedState(localStorage.getItem(STORAGE_KEY));
+  } catch (e) {
+    console.error('Errore lettura localStorage:', e);
+    return parseSavedState(null);
+  }
 }
 
+// localStorage esiste solo nel browser: il calcolatore parte dopo, con i dati già letti.
 export default function FitetCalculatorPage() {
+  const isClient = useSyncExternalStore(
+    subscribeToNothing,
+    () => true,
+    () => false
+  );
+
+  if (!isClient) {
+    return <div className="min-h-screen bg-slate-50" aria-busy="true" />;
+  }
+  return <FitetCalculator />;
+}
+
+function FitetCalculator() {
   // Stato Giocatore
-  const [initialPoints, setInitialPoints] = useState<number>(5000);
-  const [gender, setGender] = useState<Gender>('M');
-  const [isFuoriQuadro, setIsFuoriQuadro] = useState<boolean>(false);
-  const [ittfEnabled, setIttfEnabled] = useState<boolean>(false);
-  const [ittfRank, setIttfRank] = useState<number>(0);
-  const [ittfSeniorPoints, setIttfSeniorPoints] = useState<number>(0);
+  const [saved] = useState(readSavedState);
+  const [initialPoints, setInitialPoints] = useState<number>(saved.initialPoints);
+  const [gender, setGender] = useState<Gender>(saved.gender);
+  const [isFuoriQuadro, setIsFuoriQuadro] = useState<boolean>(saved.isFuoriQuadro);
+  const [ittfEnabled, setIttfEnabled] = useState<boolean>(saved.ittfEnabled);
+  const [ittfRank, setIttfRank] = useState<number>(saved.ittfRank);
+  const [ittfSeniorPoints, setIttfSeniorPoints] = useState<number>(saved.ittfSeniorPoints);
 
   // Liste Attività
-  const [matches, setMatches] = useState<Match[]>([]);
-  const [tournaments, setTournaments] = useState<TournamentResult[]>([]);
+  const [matches, setMatches] = useState<Match[]>(saved.matches);
+  const [tournaments, setTournaments] = useState<TournamentResult[]>(saved.tournaments);
 
   // Form Nuova Partita Campionato a Squadre
   const [selectedSeries, setSelectedSeries] = useState<ChampionshipSeriesId>('C2_M');
   const [opponentPoints, setOpponentPoints] = useState<number>(5200);
+  // Art. 2.3: conta la classifica antecedente la partita. Null = usa il punteggio iniziale.
+  const [myPointsAtMatch, setMyPointsAtMatch] = useState<number | null>(null);
   const [isWalkover, setIsWalkover] = useState<boolean>(false);
   const [isDifferentGender, setIsDifferentGender] = useState<boolean>(false);
   const [matchNote, setMatchNote] = useState<string>('');
@@ -54,27 +75,10 @@ export default function FitetCalculatorPage() {
   const [selectedTournament, setSelectedTournament] = useState<string>('OPEN4');
   const [roundReached, setRoundReached] = useState<BracketRoundIndex>(3); // Quarti
   const [groupWins, setGroupWins] = useState<number>(2);
-  const [bracketDepth, setBracketDepth] = useState<number>(6); // Default L6 (100%)
+  const [bracketDepth, setBracketDepth] = useState<number>(6); // Default L6
 
   // Stato Modalità Verifica Fine Mese
   const [officialScoreInput, setOfficialScoreInput] = useState<string>('');
-
-  // Caricamento da localStorage
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (typeof parsed.initialPoints === 'number') setInitialPoints(parsed.initialPoints);
-        if (parsed.gender) setGender(parsed.gender);
-        if (typeof parsed.isFuoriQuadro === 'boolean') setIsFuoriQuadro(parsed.isFuoriQuadro);
-        if (Array.isArray(parsed.matches)) setMatches(parsed.matches);
-        if (Array.isArray(parsed.tournaments)) setTournaments(parsed.tournaments);
-      }
-    } catch (e) {
-      console.error('Errore lettura localStorage:', e);
-    }
-  }, []);
 
   // Salvataggio automatico su localStorage
   useEffect(() => {
@@ -87,12 +91,24 @@ export default function FitetCalculatorPage() {
           isFuoriQuadro,
           matches,
           tournaments,
+          ittfEnabled,
+          ittfRank,
+          ittfSeniorPoints,
         })
       );
     } catch (e) {
       console.error('Errore salvataggio localStorage:', e);
     }
-  }, [initialPoints, gender, isFuoriQuadro, matches, tournaments]);
+  }, [
+    initialPoints,
+    gender,
+    isFuoriQuadro,
+    matches,
+    tournaments,
+    ittfEnabled,
+    ittfRank,
+    ittfSeniorPoints,
+  ]);
 
   // Calcolo Principale (Puro & Reattivo)
   const breakdown = useMemo(() => {
@@ -120,44 +136,46 @@ export default function FitetCalculatorPage() {
   ]);
 
   // Anteprima live partita squadre nel form
+  const effectiveMyPoints = myPointsAtMatch ?? initialPoints;
   const matchPreview = useMemo(() => {
     return calculateSingleMatchScore(
       selectedSeries,
-      initialPoints,
+      effectiveMyPoints,
       opponentPoints,
       isWalkover,
       isDifferentGender
     );
-  }, [selectedSeries, initialPoints, opponentPoints, isWalkover, isDifferentGender]);
+  }, [selectedSeries, effectiveMyPoints, opponentPoints, isWalkover, isDifferentGender]);
 
   // Anteprima live torneo nel form
   const currentTournamentConfig = TOURNAMENT_CATALOG[selectedTournament];
-  const tournamentPreview = useMemo(() => {
-    if (!currentTournamentConfig) return { part: 0, piazz: 0, gir: 0, tot: 0 };
-    const wins = Math.min(groupWins, currentTournamentConfig.maxVit);
-    const gir = wins * currentTournamentConfig.ptsVit;
-    const part = currentTournamentConfig.girq;
-    let piazz = 0;
-    if (roundReached >= 0) {
-      if (currentTournamentConfig.open && currentTournamentConfig.nominalValue) {
-        piazz = calculateOpenPlacementPoints(
-          currentTournamentConfig.nominalValue,
-          roundReached,
-          bracketDepth
-        );
-      } else {
-        piazz = currentTournamentConfig.turni[roundReached] ?? 0;
-      }
-    }
-    return { part, piazz, gir, tot: part + piazz + gir };
-  }, [currentTournamentConfig, roundReached, groupWins, bracketDepth]);
+  const selectableRounds = getSelectableRounds(currentTournamentConfig, bracketDepth);
+  const effectiveRound = selectableRounds.some((r) => r.value === roundReached)
+    ? roundReached
+    : selectableRounds[selectableRounds.length - 1].value;
+  const previewPoints = currentTournamentConfig
+    ? calculateTournamentEntryPoints(currentTournamentConfig, {
+        roundReached: effectiveRound,
+        groupWins,
+        bracketDepthLevels: bracketDepth,
+      })
+    : { participationPoints: 0, placementPoints: 0, groupWinPoints: 0 };
+  const tournamentPreview = {
+    part: previewPoints.participationPoints,
+    piazz: previewPoints.placementPoints,
+    gir: previewPoints.groupWinPoints,
+    tot:
+      previewPoints.participationPoints +
+      previewPoints.placementPoints +
+      previewPoints.groupWinPoints,
+  };
 
   // Verifica punteggio ufficiale
+  const parsedOfficialScore = parseOfficialScore(officialScoreInput);
   const verification = useMemo(() => {
-    const num = parseOfficialScore(officialScoreInput);
-    if (num === null) return null;
-    return verifyOfficialScore(breakdown.projectedFinalPoints, num, breakdown);
-  }, [officialScoreInput, breakdown]);
+    if (parsedOfficialScore === null) return null;
+    return verifyOfficialScore(breakdown.projectedFinalPoints, parsedOfficialScore, breakdown);
+  }, [parsedOfficialScore, breakdown]);
 
   // Handlers
   const handleAddMatch = (e: React.FormEvent) => {
@@ -165,14 +183,15 @@ export default function FitetCalculatorPage() {
     const newMatch: Match = {
       id: crypto.randomUUID(),
       seriesId: selectedSeries,
-      myCurrentPoints: initialPoints,
-      opponentPoints: Number(opponentPoints) || 0,
+      myCurrentPoints: effectiveMyPoints,
+      opponentPoints,
       isWalkoverOrUnplayed: isWalkover,
       isDifferentGender,
       note: matchNote.trim() || undefined,
     };
     setMatches((prev) => [...prev, newMatch]);
     setMatchNote('');
+    setMyPointsAtMatch(null);
   };
 
   const handleRemoveMatch = (id: string) => {
@@ -184,7 +203,7 @@ export default function FitetCalculatorPage() {
     const newTr: TournamentResult = {
       id: crypto.randomUUID(),
       tournamentId: selectedTournament,
-      roundReached,
+      roundReached: effectiveRound,
       groupWins: Math.min(groupWins, currentTournamentConfig?.maxVit ?? 4),
       bracketDepthLevels: currentTournamentConfig?.open ? bracketDepth : undefined,
     };
@@ -216,7 +235,7 @@ export default function FitetCalculatorPage() {
         <div className="max-w-6xl mx-auto px-4 py-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
             <span className="inline-block bg-blue-500/30 border border-blue-400/40 text-blue-100 text-xs font-semibold px-2.5 py-0.5 rounded-full mb-1.5">
-              NUOVO ALGORITMO MERITO 2025/2026 - 2026/2027
+              METODO A MERITO - STAGIONE 2026/2027
             </span>
             <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight">
               Calcolatore Classifica FITeT Live
@@ -245,7 +264,6 @@ export default function FitetCalculatorPage() {
             <p className="text-2xl sm:text-3xl font-bold text-slate-800 mt-1">
               {breakdown.initialPoints.toLocaleString('it-IT')}
             </p>
-            <p className="text-xs text-slate-500 mt-1">{breakdown.estimatedCategory}</p>
           </div>
 
           <div className="bg-white rounded-xl p-4 shadow-sm border border-sky-200">
@@ -290,8 +308,20 @@ export default function FitetCalculatorPage() {
                 ? `Incl. +${breakdown.ittfProtectionPoints} pt Protezione ITTF`
                 : 'Nessuna penalità per sconfitte'}
             </p>
+            <p className="text-xs text-blue-100 mt-1">
+              Categoria (stima indicativa): {breakdown.estimatedCategory}
+            </p>
           </div>
         </section>
+
+        {breakdown.fuoriQuadroEndSeasonProjection !== breakdown.projectedFinalPoints && (
+          <p className="bg-amber-50 border border-amber-200 text-amber-900 rounded-lg px-4 py-3 text-xs">
+            {breakdown.fuoriQuadroEndSeasonProjection === null
+              ? 'Art. 2.7: se resti Fuori Quadro senza disputare incontri, il punteggio di fine stagione dipende da categoria e anni di permanenza e non è calcolabile qui.'
+              : `Art. 2.7: senza alcun incontro disputato in stagione, a fine anno si passa Fuori Quadro con il 5% in meno (${breakdown.fuoriQuadroEndSeasonProjection.toLocaleString('it-IT')} pt).`}{' '}
+            Qui si inseriscono solo le vittorie: se hai giocato anche solo una partita persa, questo avviso non ti riguarda.
+          </p>
+        )}
 
         {/* CARD 1: DATI INIZIALI ATLETA */}
         <section className="bg-white rounded-xl shadow-sm border border-slate-200 border-t-4 border-t-indigo-600 p-5">
@@ -306,8 +336,11 @@ export default function FitetCalculatorPage() {
               </label>
               <input
                 type="number"
-                value={initialPoints}
-                onChange={(e) => setInitialPoints(Math.max(0, Number(e.target.value)))}
+                min={0}
+                step="any"
+                placeholder="0"
+                value={initialPoints || ''}
+                onChange={(e) => setInitialPoints(toNonNegativeNumber(e.target.value))}
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold focus:ring-2 focus:ring-indigo-500 focus:outline-none"
               />
             </div>
@@ -323,7 +356,7 @@ export default function FitetCalculatorPage() {
                 }}
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
               >
-                <option value="">-- Imposta da tabella federale --</option>
+                <option value="">-- Imposta da Art. 2.1 --</option>
                 {NEW_PLAYER_PRESETS.map((p) => (
                   <option key={p.points} value={p.points}>
                     {p.label} ({p.points.toLocaleString('it-IT')} pt)
@@ -397,7 +430,7 @@ export default function FitetCalculatorPage() {
                   min={1}
                   max={300}
                   value={ittfRank || ''}
-                  onChange={(e) => setIttfRank(Number(e.target.value))}
+                  onChange={(e) => setIttfRank(toNonNegativeNumber(e.target.value))}
                   placeholder="Es. 85"
                   className="w-full rounded-lg border border-indigo-200 px-3 py-1.5 text-sm"
                 />
@@ -410,7 +443,7 @@ export default function FitetCalculatorPage() {
                   type="number"
                   min={0}
                   value={ittfSeniorPoints || ''}
-                  onChange={(e) => setIttfSeniorPoints(Number(e.target.value))}
+                  onChange={(e) => setIttfSeniorPoints(toNonNegativeNumber(e.target.value))}
                   placeholder="Es. 250"
                   className="w-full rounded-lg border border-indigo-200 px-3 py-1.5 text-sm"
                 />
@@ -457,24 +490,42 @@ export default function FitetCalculatorPage() {
                     </label>
                     <input
                       type="number"
-                      value={opponentPoints}
-                      onChange={(e) => setOpponentPoints(Number(e.target.value))}
+                      min={0}
+                      step="any"
+                      placeholder="0"
+                      value={opponentPoints || ''}
+                      onChange={(e) => setOpponentPoints(toNonNegativeNumber(e.target.value))}
                       className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-sky-500 focus:outline-none"
                     />
                   </div>
-                </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    Nome Avversario / Nota (Opzionale)
-                  </label>
-                  <input
-                    type="text"
-                    value={matchNote}
-                    onChange={(e) => setMatchNote(e.target.value)}
-                    placeholder="Es. Mario Rossi (3ª giornata andata)"
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-sky-500 focus:outline-none"
-                  />
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">
+                      I Miei Punti Prima della Partita
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      placeholder="0"
+                      value={effectiveMyPoints || ''}
+                      onChange={(e) => setMyPointsAtMatch(toNonNegativeNumber(e.target.value))}
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-sky-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-600 mb-1">
+                      Nome Avversario / Nota (Opzionale)
+                    </label>
+                    <input
+                      type="text"
+                      value={matchNote}
+                      onChange={(e) => setMatchNote(e.target.value)}
+                      placeholder="Es. Mario Rossi (3ª giornata andata)"
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-sky-500 focus:outline-none"
+                    />
+                  </div>
                 </div>
 
                 <div className="flex flex-wrap gap-4 pt-1">
@@ -524,6 +575,7 @@ export default function FitetCalculatorPage() {
                     <thead>
                       <tr className="bg-slate-100 text-slate-700 border-y border-slate-200">
                         <th className="py-2 px-2 text-left">Serie / Avversario</th>
+                        <th className="py-2 px-2 text-right">Miei Pt</th>
                         <th className="py-2 px-2 text-right">Pt Avv.</th>
                         <th className="py-2 px-2 text-right">Base</th>
                         <th className="py-2 px-2 text-right">Bonus</th>
@@ -538,10 +590,13 @@ export default function FitetCalculatorPage() {
                             <div>{m.seriesName}</div>
                             {m.note && <div className="text-[11px] text-slate-500">{m.note}</div>}
                             {(m.isWalkoverOrUnplayed || m.isDifferentGender) && (
-                              <span className="inline-block text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.2 rounded">
+                              <span className="inline-block text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">
                                 Non valida ai fini punti (Art. 2.3)
                               </span>
                             )}
+                          </td>
+                          <td className="py-2 px-2 text-right">
+                            {m.myCurrentPoints.toLocaleString('it-IT')}
                           </td>
                           <td className="py-2 px-2 text-right">
                             {m.opponentPoints.toLocaleString('it-IT')}
@@ -577,13 +632,14 @@ export default function FitetCalculatorPage() {
               </h2>
               <p className="text-xs text-slate-500 mb-4">
                 Partecipazione + Piazzamento tabellone (entro il limite di tornei validi) + Vittorie
-                nei gironi.
+                nei gironi. Se giochi più gare nello stesso torneo, inserisci solo quella con il
+                risultato migliore (Art. 2.4).
               </p>
 
               <form onSubmit={handleAddTournament} className="space-y-3">
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">
-                    Tipologia Torneo Ufficiale
+                    Tipologia Torneo
                   </label>
                   <select
                     value={selectedTournament}
@@ -609,11 +665,11 @@ export default function FitetCalculatorPage() {
                       Piazzamento Tabellone Principale
                     </label>
                     <select
-                      value={roundReached}
+                      value={effectiveRound}
                       onChange={(e) => setRoundReached(Number(e.target.value) as BracketRoundIndex)}
                       className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                     >
-                      {BRACKET_ROUND_LABELS.map((r) => (
+                      {selectableRounds.map((r) => (
                         <option key={r.value} value={r.value}>
                           {r.label}
                         </option>
@@ -630,7 +686,7 @@ export default function FitetCalculatorPage() {
                       min={0}
                       max={currentTournamentConfig?.maxVit ?? 4}
                       value={groupWins}
-                      onChange={(e) => setGroupWins(Number(e.target.value))}
+                      onChange={(e) => setGroupWins(Math.trunc(toNonNegativeNumber(e.target.value)))}
                       className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                     />
                   </div>
@@ -639,7 +695,7 @@ export default function FitetCalculatorPage() {
                 {currentTournamentConfig?.open && (
                   <div>
                     <label className="block text-xs font-semibold text-slate-600 mb-1">
-                      Dimensione Tabellone Open (Livello Massimo L1–L8 - Tabella 4)
+                      Dimensione Tabellone Open (primo turno e percentuale dei punti)
                     </label>
                     <select
                       value={bracketDepth}
@@ -752,9 +808,14 @@ export default function FitetCalculatorPage() {
                 inputMode="decimal"
                 value={officialScoreInput}
                 onChange={(e) => setOfficialScoreInput(e.target.value)}
-                placeholder="Es. 5420,25"
+                placeholder="Es. 5.420 oppure 5420,25"
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-bold focus:ring-2 focus:ring-amber-500 focus:outline-none"
               />
+              {officialScoreInput.trim() !== '' && parsedOfficialScore === null && (
+                <p className="text-xs text-rose-700 mt-1">
+                  Numero non valido: scrivi ad esempio 5420, 5.420 oppure 5.420,25.
+                </p>
+              )}
             </div>
           </div>
 
@@ -790,6 +851,11 @@ export default function FitetCalculatorPage() {
           )}
         </section>
       </main>
+
+      <footer className="max-w-6xl mx-auto px-4 mt-8 text-xs text-slate-500">
+        Progetto non ufficiale, non affiliato alla FITeT. I valori sono una stima e vanno sempre
+        confrontati con la classifica ufficiale.
+      </footer>
     </div>
   );
 }
