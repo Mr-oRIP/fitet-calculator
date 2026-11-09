@@ -6,8 +6,8 @@ Calcolatore del punteggio di classifica FITeT (tennistavolo) per la stagione 202
 
 ## Cosa fa
 
-- **Partite di campionato:** punti base per serie (A1-D4, femminile, master, giovanile) più il bonus per vittoria inattesa (10% della differenza punti, massimo 120). Assegna 0 punti per assenza/rinuncia e per incontri tra sessi diversi.
-- **Tornei:** limite dei tornei validi per tipologia, punti partecipazione, vittorie nei gironi e piazzamento nel tabellone. Per gli Open usa i livelli da L0 a L10 in percentuale del valore nominale, in base alla dimensione del tabellone.
+- **Partite di campionato:** punti base per serie (maschile, femminile, master, giovanile, paralimpici e coppe) più il bonus per vittoria inattesa (10% della differenza punti, massimo 120). Assegna 0 punti per assenza/rinuncia e per incontri tra sessi diversi.
+- **Tornei:** limite dei tornei validi per gruppo di gare, punti partecipazione, vittorie nei gironi e piazzamento nel tabellone. Per gli Open applica alla colonna della Tabella 3 la percentuale del tabellone: la regola coincide con i risultati ufficiali 2026/27 confrontati, su tabelloni da 17-32 e 33-64 qualificati.
 - **Altre regole:** protezione ITTF, fuori quadro (decurtazione del 5% a fine stagione per inattività) e stima della categoria.
 - **Verifica:** confronta il calcolo con il punteggio ufficiale inserito dall'utente.
 - **Dati in locale:** lo stato resta nel browser (`localStorage`), niente server e niente account.

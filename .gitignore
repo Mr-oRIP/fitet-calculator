@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Istruzioni locali per Claude Code (non pubblicare)
+CLAUDE.md
+
+# Appunti locali
+DA_VERIFICARE.md
